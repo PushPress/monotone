@@ -237,6 +237,7 @@ export const createMonotonePool = (options: MonotoneOptions): Pool => {
     options.logger?.info(
       'Monotone pool is disabled - all queries will go to primary',
     );
+    return primary;
   }
 
   return createPoolProxy({
