@@ -126,18 +126,18 @@ export interface MonotoneOptions {
 }
 
 /**
- * Pre-compiled regex for detecting write operations
+ * Pre-compiled regex for detecting read operations
  * Matches SQL keywords at the start of the string (after whitespace)
  */
-const WRITE_QUERY_REGEX =
-  /^\s*(insert|update|delete|replace|create|drop|alter|truncate|lock|unlock|grant|revoke)\b/i;
+const READ_QUERY_REGEX =
+  /^\s*(select|show|describe|desc|explain|with)\b/i;
 
 /**
- * Detect if a SQL query is a write operation
+ * Detect if a SQL query is a read operation
  * Uses a pre-compiled regex for optimal performance
  */
-function isWriteQuery(sql: string): boolean {
-  return WRITE_QUERY_REGEX.test(sql);
+function isReadQuery(sql: string): boolean {
+  return READ_QUERY_REGEX.test(sql);
 }
 
 /**
@@ -180,45 +180,47 @@ function createPoolProxy({
       return async function (...args: unknown[]) {
         const sql = args[0] as string;
 
-        if (isWriteQuery(sql)) {
-          logger?.debug(
-            {
-              sql: sql.substring(0, 100) as string,
-            },
-            'Routing write query to primary',
-          );
-
-          const result = await Reflect.apply(
-            Reflect.get(target, 'query', receiver) as Pool['query'],
-            receiver,
-            args,
-          );
-
-          // Capture GTID after write operation
-          if (gtidProvider.onWriteGTID) {
-            await selector.captureGTID();
+        if (isReadQuery(sql)) {
+          // Route read queries to replicas
+          if (state.replicas.length === 0) {
+            logger?.warn('No replicas available, routing read query to primary');
+            return Reflect.apply(
+              Reflect.get(target, 'query', receiver) as Pool['query'],
+              receiver,
+              args,
+            );
           }
 
-          return result;
-        }
-        if (state.replicas.length === 0) {
-          logger?.warn('No replicas available, routing read query to primary');
-          return Reflect.apply(
-            Reflect.get(target, 'query', receiver) as Pool['query'],
-            receiver,
-            args,
-          );
-        }
+          if (state.replicas.length > 1) {
+            logger?.warn(
+              'Rotating between read replicas is not supported yet - will only use one replica',
+            );
+          }
 
-        if (state.replicas.length > 1) {
-          logger?.warn(
-            'Rotating between read replicas is not supported yet - will only use one replica',
-          );
+          const selectedReplica = await selector.selectPool();
+          return selectedReplica.query(...(args as Parameters<Pool['query']>));
         }
 
-        const selectedReplica = await selector.selectPool();
+        // Default to primary for unrecognized queries (safer for writes)
+        logger?.debug(
+          {
+            sql: sql.substring(0, 100) as string,
+          },
+          'Routing unrecognized query to primary (defaulting to write behavior)',
+        );
 
-        return selectedReplica.query(...(args as Parameters<Pool['query']>));
+        const result = await Reflect.apply(
+          Reflect.get(target, 'query', receiver) as Pool['query'],
+          receiver,
+          args,
+        );
+
+        // Capture GTID after write operation
+        if (gtidProvider.onWriteGTID) {
+          await selector.captureGTID();
+        }
+
+        return result;
       } as Pool['query'];
     },
   });
