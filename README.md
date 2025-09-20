@@ -1,5 +1,7 @@
 # Monotone
 
+> ⚠️ **Work in Progress**: This project is currently under active development. The API may change and some features may not be fully implemented yet. Use with caution in production environments.
+
 A MySQL connection pool that automatically routes queries between primary and replica databases using GTID-based synchronization.
 
 ## Overview
@@ -12,6 +14,7 @@ Monotone provides intelligent query routing for MySQL master-replica setups, ens
 - **GTID-Based Synchronization**: Uses MySQL GTIDs to ensure replica consistency
 - **Zero-Overhead Fallback**: Falls back to primary when replicas are unavailable
 - **Customizable GTID Strategy**: Control how GTIDs are retrieved and stored
+- **Disabled Mode**: Route reads to replicas without GTID synchronization for simpler setups
 - **Comprehensive Logging**: Detailed logging for debugging and monitoring
 - **TypeScript Support**: Full TypeScript definitions included
 
@@ -55,6 +58,30 @@ const pool = createMonotonePool({
 // Use like any MySQL pool
 const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [123]);
 ```
+
+## Disabled Mode
+
+For simpler setups where you don't need GTID-based synchronization, you can enable disabled mode:
+
+```typescript
+const pool = createMonotonePool({
+  primary: primaryConfig,
+  replicas: [replicaConfig],
+  gtidProvider: myProvider,
+  disabled: true, // Enable disabled mode
+});
+
+// In disabled mode:
+// - Read queries → First replica (no GTID synchronization)
+// - Write queries → Primary (unchanged)
+// - No GTID capture or synchronization overhead
+```
+
+**When to use disabled mode:**
+- Development environments
+- Simple read/write splitting without strict consistency requirements
+- When you want to avoid GTID synchronization overhead
+- Testing scenarios where replica lag is acceptable
 
 ## Architecture
 

@@ -81,7 +81,7 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
       expect(typeof pool.query).toBe('function');
     });
 
-    it('should return primary pool when disabled', () => {
+    it('should route reads to replica without GTID logic when disabled', async () => {
       const config = {
         primary: {
           host: 'primary',
@@ -102,8 +102,47 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
       };
 
       const pool = createMonotonePool(config);
+      mockReplica.mockSuccess([{ id: 1, name: 'John' }]);
 
-      expect(pool).toBe(mockPrimary);
+      // Read query should go to replica without GTID synchronization
+      const result = await pool.query('SELECT * FROM users');
+      
+      expect(mockReplica.query).toHaveBeenCalledWith('SELECT * FROM users');
+      expect(mockPrimary.query).not.toHaveBeenCalled();
+      expect(result).toEqual([[{ id: 1, name: 'John' }], {}]);
+    });
+
+    it('should still route write queries to primary when disabled', async () => {
+      const config = {
+        primary: {
+          host: 'primary',
+          user: 'user',
+          password: 'pass',
+          database: 'test',
+        },
+        replicas: [
+          { host: 'replica', user: 'user', password: 'pass', database: 'test' },
+        ],
+        gtidProvider: {
+          async getGTID() {
+            return 'test-gtid';
+          },
+          async onWriteGTID() {},
+        },
+        disabled: true,
+      };
+
+      const pool = createMonotonePool(config);
+      mockPrimary.mockSuccess();
+
+      // Write query should still go to primary
+      await pool.query('INSERT INTO users (name) VALUES (?)', ['John']);
+      
+      expect(mockPrimary.query).toHaveBeenCalledWith(
+        'INSERT INTO users (name) VALUES (?)',
+        ['John']
+      );
+      expect(mockReplica.query).not.toHaveBeenCalled();
     });
   });
 
