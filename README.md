@@ -237,7 +237,9 @@ const pool = createMonotonePool({
 
 ### MySQL Configuration Requirements
 
-Monotone requires specific MySQL configuration to function properly. The following settings must be enabled on both your primary and replica MySQL servers:
+Monotone requires **MySQL 5.7 or later** to function properly. This is because the library relies on GTID (Global Transaction Identifier) functionality and the `WAIT_FOR_EXECUTED_GTID_SET` function, which were introduced in MySQL 5.7.
+
+The following settings must be enabled on both your primary and replica MySQL servers:
 
 #### Primary Database Configuration
 
