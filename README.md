@@ -44,15 +44,6 @@ const pool = createMonotonePool({
       database: 'mydb',
     },
   ],
-  gtidProvider: {
-    async getGTID() {
-      // Return current GTID for replica synchronization
-      const [rows] = await primary.query(
-        'SELECT @@GLOBAL.GTID_EXECUTED as gtid',
-      );
-      return rows[0]?.gtid;
-    },
-  },
 });
 
 // Use like any MySQL pool
@@ -67,7 +58,6 @@ For simpler setups where you don't need GTID-based synchronization, you can enab
 const pool = createMonotonePool({
   primary: primaryConfig,
   replicas: [replicaConfig],
-  gtidProvider: myProvider,
   disabled: true, // Enable disabled mode
 });
 
@@ -148,14 +138,14 @@ const pool = createMonotonePool({
 
 #### Read Operation Flow
 
-1. **GTID Retrieval**: Call `gtidProvider.getGTID()` (application-controlled, typically fast)
+1. **GTID Retrieval**: Query primary database for current GTID (typically fast)
 2. **Synchronization Check**: Wait for replica to catch up to retrieved GTID (bounded by timeout)
 3. **Query Execution**: Route to synchronized replica or fallback to primary
 4. **Result Return**: Return query results to application
 
 #### Performance Characteristics
 
-- **GTID Retrieval**: Depends on application implementation (Redis: ~1ms, Database: ~5-10ms)
+- **GTID Retrieval**: Query primary database (~5-10ms)
 - **Synchronization Wait**: Bounded by `timeout` setting (default: 50ms max)
 - **Total Read Overhead**: GTID retrieval + synchronization wait (typically < 60ms)
 - **Fallback Performance**: Immediate fallback to primary when timeout exceeded
@@ -231,7 +221,6 @@ const pool = createMonotonePool({
     },
     healthCheckInterval: 30000, // 30 seconds
   },
-  gtidProvider: myProvider,
 });
 ```
 
