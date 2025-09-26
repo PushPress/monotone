@@ -249,6 +249,11 @@ function createPoolProxy({
  */
 export const createMonotonePool = (options: MonotoneOptions): Pool => {
   const primary = createPool(options.primary);
+
+  // track session ids so they are returned on writes
+  primary.on('connection', async (conn) => {
+    await conn.query('SET SESSION session_track_gtids = OWN_GTID');
+  });
   const replicas = options.replicas.map((replicaConfig) =>
     createPool(replicaConfig),
   );
