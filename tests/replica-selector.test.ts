@@ -32,21 +32,13 @@ describe('GTIDReplicaSelector', () => {
   let mockPrimary: SimpleMockPool;
   let mockReplica: SimpleMockPool;
   let selector: GTIDReplicaSelector;
-  let mockGTIDProvider: any;
-
   beforeEach(() => {
     mockPrimary = new SimpleMockPool();
     mockReplica = new SimpleMockPool();
-    
-    mockGTIDProvider = {
-      getGTID: vi.fn().mockResolvedValue('test-gtid-123'),
-      onWriteGTID: vi.fn().mockResolvedValue(undefined)
-    };
 
     selector = new GTIDReplicaSelector({
       primary: mockPrimary as any,
       replicas: [mockReplica as any],
-      gtidProvider: mockGTIDProvider,
       options: {
         timeout: 0.1,
         logger: {
@@ -65,6 +57,14 @@ describe('GTIDReplicaSelector', () => {
 
   describe('pool selection behavior', () => {
     it('should select replica when GTID sync succeeds', async () => {
+      // Mock primary GTID retrieval
+      mockPrimary.query.mockImplementation((sql: string) => {
+        if (sql.includes('GTID_EXECUTED')) {
+          return Promise.resolve([[{ gtid: 'test-gtid-123' }], {}]);
+        }
+        return Promise.resolve([[], {}]);
+      });
+      
       // Mock successful GTID wait
       mockReplica.mockSuccess([{ waited: 0 }]);
 
@@ -78,6 +78,14 @@ describe('GTIDReplicaSelector', () => {
     });
 
     it('should fallback to primary when replica sync times out', async () => {
+      // Mock primary GTID retrieval
+      mockPrimary.query.mockImplementation((sql: string) => {
+        if (sql.includes('GTID_EXECUTED')) {
+          return Promise.resolve([[{ gtid: 'test-gtid-123' }], {}]);
+        }
+        return Promise.resolve([[], {}]);
+      });
+      
       // Mock timeout response
       mockReplica.mockSuccess([{ waited: 1 }]);
 
@@ -87,6 +95,14 @@ describe('GTIDReplicaSelector', () => {
     });
 
     it('should fallback to primary when replica sync fails', async () => {
+      // Mock primary GTID retrieval
+      mockPrimary.query.mockImplementation((sql: string) => {
+        if (sql.includes('GTID_EXECUTED')) {
+          return Promise.resolve([[{ gtid: 'test-gtid-123' }], {}]);
+        }
+        return Promise.resolve([[], {}]);
+      });
+      
       // Mock error response
       mockReplica.mockSuccess([{ waited: -1 }]);
 
@@ -99,7 +115,6 @@ describe('GTIDReplicaSelector', () => {
       const selectorNoReplicas = new GTIDReplicaSelector({
         primary: mockPrimary as any,
         replicas: [],
-        gtidProvider: mockGTIDProvider,
         options: {
           timeout: 0.1,
           logger: {
@@ -121,15 +136,27 @@ describe('GTIDReplicaSelector', () => {
     });
 
     it('should fallback to primary when GTID is unavailable', async () => {
-      mockGTIDProvider.getGTID.mockResolvedValue(undefined);
+      // Mock primary GTID retrieval to return undefined
+      mockPrimary.query.mockImplementation((sql: string) => {
+        if (sql.includes('GTID_EXECUTED')) {
+          return Promise.resolve([[{ gtid: undefined }], {}]);
+        }
+        return Promise.resolve([[], {}]);
+      });
 
       const selectedPool = await selector.selectPool();
 
       expect(selectedPool).toBe(mockPrimary);
     });
 
-    it('should fallback to primary when GTID provider throws error', async () => {
-      mockGTIDProvider.getGTID.mockRejectedValue(new Error('GTID provider error'));
+    it('should fallback to primary when GTID retrieval throws error', async () => {
+      // Mock primary GTID retrieval to throw error
+      mockPrimary.query.mockImplementation((sql: string) => {
+        if (sql.includes('GTID_EXECUTED')) {
+          return Promise.reject(new Error('GTID retrieval error'));
+        }
+        return Promise.resolve([[], {}]);
+      });
 
       const selectedPool = await selector.selectPool();
 
@@ -137,49 +164,13 @@ describe('GTIDReplicaSelector', () => {
     });
   });
 
-  describe('GTID capture behavior', () => {
-    it('should capture GTID after write operation', async () => {
-      mockPrimary.mockSuccess([{ gtid: 'new-gtid-456' }]);
 
-      await selector.captureGTID();
-
-      expect(mockPrimary.query).toHaveBeenCalledWith(
-        expect.stringContaining('SELECT @@GLOBAL.GTID_EXECUTED')
-      );
-      expect(mockGTIDProvider.onWriteGTID).toHaveBeenCalledWith('new-gtid-456');
-    });
-
-    it('should handle GTID capture when no GTID available', async () => {
-      mockPrimary.mockSuccess([]);
-
-      await selector.captureGTID();
-
-      expect(mockPrimary.query).toHaveBeenCalledWith(
-        expect.stringContaining('SELECT @@GLOBAL.GTID_EXECUTED')
-      );
-      expect(mockGTIDProvider.onWriteGTID).not.toHaveBeenCalled();
-    });
-
-    it('should handle GTID capture error gracefully', async () => {
-      mockPrimary.mockError(new Error('Database error'));
-
-      await expect(selector.captureGTID()).resolves.not.toThrow();
-
-      expect(mockGTIDProvider.onWriteGTID).not.toHaveBeenCalled();
-    });
-
-    it('should not call onWriteGTID when not provided', async () => {
-      const gtidProviderWithoutCallback = {
-        getGTID: vi.fn().mockResolvedValue('test-gtid')
-        // No onWriteGTID method
-      };
-
-      const selectorWithoutCallback = new GTIDReplicaSelector({
+  describe('timeout configuration', () => {
+    it('should use default timeout when not specified', async () => {
+      const selectorDefaultTimeout = new GTIDReplicaSelector({
         primary: mockPrimary as any,
         replicas: [mockReplica as any],
-        gtidProvider: gtidProviderWithoutCallback,
         options: {
-          timeout: 0.1,
           logger: {
             debug: vi.fn(),
             warn: vi.fn(),
@@ -193,35 +184,12 @@ describe('GTIDReplicaSelector', () => {
         }
       });
 
-      mockPrimary.mockSuccess([{ gtid: 'new-gtid-789' }]);
-
-      await selectorWithoutCallback.captureGTID();
-
-      expect(mockPrimary.query).toHaveBeenCalledWith(
-        expect.stringContaining('SELECT @@GLOBAL.GTID_EXECUTED')
-      );
-      // Should not throw error even though onWriteGTID is undefined
-    });
-  });
-
-  describe('timeout configuration', () => {
-    it('should use default timeout when not specified', async () => {
-      const selectorDefaultTimeout = new GTIDReplicaSelector({
-        primary: mockPrimary as any,
-        replicas: [mockReplica as any],
-        gtidProvider: mockGTIDProvider,
-        options: {
-          logger: {
-            debug: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-            child: vi.fn(() => ({
-              debug: vi.fn(),
-              warn: vi.fn(),
-              error: vi.fn()
-            }))
-          } as any
+      // Mock primary GTID retrieval
+      mockPrimary.query.mockImplementation((sql: string) => {
+        if (sql.includes('GTID_EXECUTED')) {
+          return Promise.resolve([[{ gtid: 'test-gtid-123' }], {}]);
         }
+        return Promise.resolve([[], {}]);
       });
 
       mockReplica.mockSuccess([{ waited: 0 }]);
@@ -239,7 +207,6 @@ describe('GTIDReplicaSelector', () => {
       const selectorCustomTimeout = new GTIDReplicaSelector({
         primary: mockPrimary as any,
         replicas: [mockReplica as any],
-        gtidProvider: mockGTIDProvider,
         options: {
           timeout: customTimeout,
           logger: {
@@ -253,6 +220,14 @@ describe('GTIDReplicaSelector', () => {
             }))
           } as any
         }
+      });
+
+      // Mock primary GTID retrieval
+      mockPrimary.query.mockImplementation((sql: string) => {
+        if (sql.includes('GTID_EXECUTED')) {
+          return Promise.resolve([[{ gtid: 'test-gtid-123' }], {}]);
+        }
+        return Promise.resolve([[], {}]);
       });
 
       mockReplica.mockSuccess([{ waited: 0 }]);

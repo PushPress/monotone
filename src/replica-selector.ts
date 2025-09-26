@@ -1,6 +1,5 @@
 import { Pool, RowDataPacket } from 'mysql2/promise';
 import { Logger } from './logger';
-import { GTIDProvider } from './monotone';
 
 type WaitRow = RowDataPacket & { waited: number };
 
@@ -19,7 +18,6 @@ interface ReplicaSelectorOptions {
  */
 export class GTIDReplicaSelector {
   private primary: Pool;
-  private gtidProvider: GTIDProvider;
   private replicas: Pool[];
   private options?: ReplicaSelectorOptions;
   /**
@@ -32,14 +30,11 @@ export class GTIDReplicaSelector {
     primary,
     replicas,
     options,
-    gtidProvider,
   }: {
     primary: Pool;
     replicas: Pool[];
-    gtidProvider: GTIDProvider;
     options?: ReplicaSelectorOptions;
   }) {
-    this.gtidProvider = gtidProvider;
     this.primary = primary;
     this.replicas = replicas;
     this.options = options;
@@ -51,7 +46,15 @@ export class GTIDReplicaSelector {
    */
   private async getGTID(): Promise<string | undefined> {
     try {
-      return await this.gtidProvider.getGTID();
+      const [gtidRows] = await this.primary.query<GTIDRow[]>(
+        'SELECT @@GLOBAL.GTID_EXECUTED as gtid',
+      );
+      
+      if (gtidRows && gtidRows.length > 0 && gtidRows[0]?.gtid) {
+        return gtidRows[0].gtid;
+      }
+      
+      return undefined;
     } catch (error) {
       this.options?.logger?.error(
         {
@@ -63,35 +66,6 @@ export class GTIDReplicaSelector {
     }
   }
 
-  /**
-   * Captures the current GTID from the primary database and notifies the GTID provider.
-   * Only captures GTID if the application has provided an onWriteComplete callback,
-   * indicating they want to control GTID storage.
-   */
-  async captureGTID(): Promise<void> {
-    try {
-      const [gtidRows] = await this.primary.query<GTIDRow[]>(
-        'SELECT @@GLOBAL.GTID_EXECUTED as gtid',
-      );
-
-      if (gtidRows && gtidRows.length > 0 && gtidRows[0]?.gtid) {
-        await this.gtidProvider.onWriteGTID?.(gtidRows[0].gtid);
-        this.options?.logger?.debug(
-          {
-            capturedGTID: gtidRows[0].gtid,
-          },
-          'GTID captured after write operation',
-        );
-      }
-    } catch (error) {
-      this.options?.logger?.warn(
-        {
-          error: error instanceof Error ? error.message : String(error),
-        },
-        'Failed to capture GTID after write operation',
-      );
-    }
-  }
 
   /**
    * Waits for a replica to catch up with the primary GTID.

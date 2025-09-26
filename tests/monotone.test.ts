@@ -8,6 +8,7 @@ class SimplePoolMock {
   public getConnection = vi.fn();
   public releaseConnection = vi.fn();
   public end = vi.fn();
+  public on = vi.fn();
 
   constructor() {
     this.query.mockResolvedValue([[], {}]);
@@ -15,6 +16,7 @@ class SimplePoolMock {
     this.getConnection.mockResolvedValue({});
     this.releaseConnection.mockResolvedValue(undefined);
     this.end.mockResolvedValue(undefined);
+    this.on.mockImplementation(() => {});
   }
 
   mockSuccess(data: any[] = []) {
@@ -46,6 +48,9 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
     const mysql2 = await import('mysql2/promise');
     mockCreatePool = vi.mocked(mysql2.createPool);
 
+    // Reset all mocks
+    vi.clearAllMocks();
+
     // Set up the mock to return our mock pools
     mockCreatePool.mockImplementation((config: any) => {
       if (config.host === 'primary') {
@@ -67,12 +72,6 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
         replicas: [
           { host: 'replica', user: 'user', password: 'pass', database: 'test' },
         ],
-        gtidProvider: {
-          async getGTID() {
-            return 'test-gtid';
-          },
-          async onWriteGTID() {},
-        },
       };
 
       const pool = createMonotonePool(config);
@@ -92,12 +91,6 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
         replicas: [
           { host: 'replica', user: 'user', password: 'pass', database: 'test' },
         ],
-        gtidProvider: {
-          async getGTID() {
-            return 'test-gtid';
-          },
-          async onWriteGTID() {},
-        },
         disabled: true,
       };
 
@@ -123,12 +116,6 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
         replicas: [
           { host: 'replica', user: 'user', password: 'pass', database: 'test' },
         ],
-        gtidProvider: {
-          async getGTID() {
-            return 'test-gtid';
-          },
-          async onWriteGTID() {},
-        },
         disabled: true,
       };
 
@@ -158,12 +145,6 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
         replicas: [
           { host: 'replica', user: 'user', password: 'pass', database: 'test' },
         ],
-        gtidProvider: {
-          async getGTID() {
-            return 'test-gtid';
-          },
-          async onWriteGTID() {},
-        },
       };
 
       const pool = createMonotonePool(config);
@@ -197,12 +178,6 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
         replicas: [
           { host: 'replica', user: 'user', password: 'pass', database: 'test' },
         ],
-        gtidProvider: {
-          async getGTID() {
-            return 'test-gtid';
-          },
-          async onWriteGTID() {},
-        },
       };
 
       const pool = createMonotonePool(config);
@@ -228,15 +203,17 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
         replicas: [
           { host: 'replica', user: 'user', password: 'pass', database: 'test' },
         ],
-        gtidProvider: {
-          async getGTID() {
-            return 'test-gtid';
-          },
-          async onWriteGTID() {},
-        },
       };
 
       const pool = createMonotonePool(config);
+
+      // Mock primary GTID retrieval
+      mockPrimary.query.mockImplementation((sql: string) => {
+        if (sql.includes('GTID_EXECUTED')) {
+          return Promise.resolve([[{ gtid: 'test-gtid-123' }], {}]);
+        }
+        return Promise.resolve([[], {}]);
+      });
 
       // Mock successful GTID wait and query
       mockReplica.query.mockImplementation((sql: string) => {
@@ -249,7 +226,7 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
       const result = await pool.query('SELECT * FROM users');
 
       expect(mockReplica.query).toHaveBeenCalledTimes(2);
-      expect(mockPrimary.query).not.toHaveBeenCalled();
+      expect(mockPrimary.query).toHaveBeenCalledWith('SELECT @@GLOBAL.GTID_EXECUTED as gtid');
       expect(result).toEqual([[{ id: 1, name: 'John' }], {}]);
     });
 
@@ -262,12 +239,6 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
           database: 'test',
         },
         replicas: [],
-        gtidProvider: {
-          async getGTID() {
-            return 'test-gtid';
-          },
-          async onWriteGTID() {},
-        },
       };
 
       const pool = createMonotonePool(config);
@@ -291,15 +262,17 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
         replicas: [
           { host: 'replica', user: 'user', password: 'pass', database: 'test' },
         ],
-        gtidProvider: {
-          async getGTID() {
-            return 'test-gtid';
-          },
-          async onWriteGTID() {},
-        },
       };
 
       const pool = createMonotonePool(config);
+
+      // Mock primary GTID retrieval
+      mockPrimary.query.mockImplementation((sql: string) => {
+        if (sql.includes('GTID_EXECUTED')) {
+          return Promise.resolve([[{ gtid: 'test-gtid-123' }], {}]);
+        }
+        return Promise.resolve([[{ id: 1, name: 'John' }], {}]);
+      });
 
       // Mock replica failure
       mockReplica.query.mockImplementation((sql: string) => {
@@ -309,84 +282,14 @@ describe('createMonotonePool - Behavior Focused Tests', () => {
         return Promise.resolve([[], {}]);
       });
 
-      mockPrimary.mockSuccess([{ id: 1, name: 'John' }]);
-
       const result = await pool.query('SELECT * FROM users');
 
+      expect(mockPrimary.query).toHaveBeenCalledWith('SELECT @@GLOBAL.GTID_EXECUTED as gtid');
       expect(mockPrimary.query).toHaveBeenCalledWith('SELECT * FROM users');
       expect(mockReplica.query).toHaveBeenCalledTimes(1); // Only GTID wait attempt
       expect(result).toEqual([[{ id: 1, name: 'John' }], {}]);
     });
   });
 
-  describe('GTID provider integration', () => {
-    it('should call GTID provider for read queries', async () => {
-      const mockGTIDProvider = {
-        getGTID: vi.fn().mockResolvedValue('test-gtid'),
-        onWriteGTID: vi.fn().mockResolvedValue(undefined),
-      };
-
-      const config = {
-        primary: {
-          host: 'primary',
-          user: 'user',
-          password: 'pass',
-          database: 'test',
-        },
-        replicas: [
-          { host: 'replica', user: 'user', password: 'pass', database: 'test' },
-        ],
-        gtidProvider: mockGTIDProvider,
-      };
-
-      const pool = createMonotonePool(config);
-
-      // Mock successful replica response
-      mockReplica.query.mockImplementation((sql: string) => {
-        if (sql.includes('WAIT_FOR_EXECUTED_GTID_SET')) {
-          return Promise.resolve([[{ waited: 0 }], {}]);
-        }
-        return Promise.resolve([[{ id: 1 }], {}]);
-      });
-
-      await pool.query('SELECT * FROM users');
-
-      expect(mockGTIDProvider.getGTID).toHaveBeenCalled();
-    });
-
-    it('should call onWriteGTID after write operations', async () => {
-      const mockGTIDProvider = {
-        getGTID: vi.fn().mockResolvedValue('test-gtid'),
-        onWriteGTID: vi.fn().mockResolvedValue(undefined),
-      };
-
-      const config = {
-        primary: {
-          host: 'primary',
-          user: 'user',
-          password: 'pass',
-          database: 'test',
-        },
-        replicas: [
-          { host: 'replica', user: 'user', password: 'pass', database: 'test' },
-        ],
-        gtidProvider: mockGTIDProvider,
-      };
-
-      const pool = createMonotonePool(config);
-
-      // Mock GTID capture
-      mockPrimary.query.mockImplementation((sql: string) => {
-        if (sql.includes('SELECT @@GLOBAL.GTID_EXECUTED')) {
-          return Promise.resolve([[{ gtid: 'new-gtid-123' }], {}]);
-        }
-        return Promise.resolve([[], {}]);
-      });
-
-      await pool.query('INSERT INTO users (name) VALUES (?)', ['John']);
-
-      expect(mockGTIDProvider.onWriteGTID).toHaveBeenCalledWith('new-gtid-123');
-    });
-  });
 });
 
