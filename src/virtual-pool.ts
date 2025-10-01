@@ -1,7 +1,7 @@
 import { createPool, Pool, PoolOptions } from 'mysql2/promise';
 import { Logger } from './logger';
-import { GTIDReplicaSelector } from './replica-selector';
-
+import { ReplicaSelector } from './replica-selector';
+import { isSelectQuery } from './mysql-parser';
 
 /**
  * Configuration options for a Monotone pool
@@ -21,20 +21,6 @@ export interface MonotoneOptions {
 }
 
 /**
- * Pre-compiled regex for detecting read operations
- * Matches SQL keywords at the start of the string (after whitespace)
- */
-const READ_QUERY_REGEX = /^\s*(select|show|describe|desc|explain|with)\b/i;
-
-/**
- * Detect if a SQL query is a read operation
- * Uses a pre-compiled regex for optimal performance
- */
-function isReadQuery(sql: string): boolean {
-  return READ_QUERY_REGEX.test(sql);
-}
-
-/**
  * Create a proxy that routes queries between primary and replica pools
  */
 function createPoolProxy({
@@ -50,17 +36,9 @@ function createPoolProxy({
   timeout?: number;
   disabled?: boolean;
 }): Pool {
-  const state = {
-    replicas: [...replicas], // Create a copy to avoid external mutation
-  };
-
-  const selector = new GTIDReplicaSelector({
-    primary,
+  const selector = new ReplicaSelector({
+    logger,
     replicas,
-    options: {
-      logger,
-      timeout,
-    },
   });
 
   return new Proxy(primary, {
@@ -73,36 +51,12 @@ function createPoolProxy({
       return async function (...args: unknown[]) {
         const sql = args[0] as string;
 
-        if (isReadQuery(sql)) {
-          // Route read queries to replicas
-          if (state.replicas.length === 0) {
-            logger?.warn(
-              'No replicas available, routing read query to primary',
-            );
-            return Reflect.apply(
-              Reflect.get(target, 'query', receiver) as Pool['query'],
-              receiver,
-              args,
-            );
-          }
+        if (isSelectQuery(sql)) {
+          const selected = selector.getNextReplica() ?? primary;
 
-          if (state.replicas.length > 1) {
-            logger?.warn(
-              'Rotating between read replicas is not supported yet - will only use one replica',
-            );
-          }
+          // TODO: use async context to wait for reads when set
 
-          let selectedPool: Pool;
-
-          // In disabled mode, route reads directly to first replica without GTID synchronization
-          // This provides simple read/write splitting without consistency guarantees
-          if (disabled) {
-            selectedPool = state.replicas[0] ?? primary;
-          } else {
-            // Normal mode: use GTID-based synchronization to ensure replica consistency
-            selectedPool = await selector.selectPool();
-          }
-          return selectedPool.query(...(args as Parameters<Pool['query']>));
+          return selected.query(...(args as Parameters<Pool['query']>));
         }
 
         // Default to primary for unrecognized queries (safer for writes)
@@ -113,13 +67,11 @@ function createPoolProxy({
           'Routing unrecognized query to primary (defaulting to write behavior)',
         );
 
-        const result = await Reflect.apply(
+        return Reflect.apply(
           Reflect.get(target, 'query', receiver) as Pool['query'],
           receiver,
           args,
         );
-
-        return result;
       } as Pool['query'];
     },
   });
@@ -128,13 +80,14 @@ function createPoolProxy({
 /**
  * Create a Monotone pool that automatically routes queries between primary and replicas
  */
-export const createMonotonePool = (options: MonotoneOptions): Pool => {
+export const createVirtualPool = (options: MonotoneOptions): Pool => {
   const primary = createPool(options.primary);
 
   // track session ids so they are returned on writes
   primary.on('connection', async (conn) => {
     await conn.query('SET SESSION session_track_gtids = OWN_GTID');
   });
+
   const replicas = options.replicas.map((replicaConfig) =>
     createPool(replicaConfig),
   );
