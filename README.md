@@ -1,4 +1,4 @@
-# Monotone
+# Virtual Pool
 
 > ⚠️ **Work in Progress**: This project is currently under active development. The API may change and some features may not be fully implemented yet. Use with caution in production environments.
 
@@ -6,7 +6,7 @@ A MySQL connection pool that automatically routes queries between primary and re
 
 ## Overview
 
-Monotone provides intelligent query routing for MySQL master-replica setups, ensuring read consistency by automatically checking replica synchronization before routing read queries. Write operations always go to the primary database, while read operations are intelligently routed to replicas that have caught up with the primary.
+Virtual Pool provides intelligent query routing for MySQL master-replica setups, ensuring read consistency by automatically checking replica synchronization before routing read queries. Write operations always go to the primary database, while read operations are intelligently routed to replicas that have caught up with the primary.
 
 ## Features
 
@@ -21,15 +21,15 @@ Monotone provides intelligent query routing for MySQL master-replica setups, ens
 ## Installation
 
 ```bash
-npm install monotone
+npm install virtual-pool
 ```
 
 ## Quick Start
 
 ```typescript
-import { createMonotonePool } from 'monotone';
+import { createVirtualPool } from 'virtual-pool';
 
-const pool = createMonotonePool({
+const pool = createVirtualPool({
   primary: {
     host: 'primary-db.example.com',
     user: 'user',
@@ -55,7 +55,7 @@ const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [123]);
 For simpler setups where you don't need GTID-based synchronization, you can enable disabled mode:
 
 ```typescript
-const pool = createMonotonePool({
+const pool = createVirtualPool({
   primary: primaryConfig,
   replicas: [replicaConfig],
   disabled: true, // Enable disabled mode
@@ -79,7 +79,7 @@ const pool = createMonotonePool({
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Application   │───▶│  Monotone Pool  │───▶│   Primary MySQL │
+│   Application   │───▶│  Virtual Pool   │───▶│   Primary MySQL │
 │                 │    │ (Virtual Pool)  │    │      Pool       │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
                                 │
@@ -110,7 +110,7 @@ const pool = createMonotonePool({
 
 #### Component Relationships
 
-- **Monotone Pool**: Acts as a virtual pool, abstracting multiple MySQL pools behind a single interface
+- **Virtual Pool**: Acts as a virtual pool, abstracting multiple MySQL pools behind a single interface
 - **Primary MySQL Pool**: Existing mysql2 connection pool for primary database
 - **Replica MySQL Pool**: Existing mysql2 connection pool for replica database
 - **Query Router**: Intercepts queries and routes based on operation type
@@ -168,7 +168,7 @@ const pool = createMonotonePool({
 
 ## Error Handling
 
-Monotone includes comprehensive error handling:
+Virtual Pool includes comprehensive error handling:
 
 - **Connection failures**: Automatic fallback to primary
 - **GTID errors**: Graceful degradation with logging
@@ -186,7 +186,7 @@ Monotone includes comprehensive error handling:
 
 ### Multiple Replica Support
 
-Currently, Monotone only uses the first replica in the `replicas` array.
+Currently, Virtual Pool only uses the first replica in the `replicas` array.
 
 #### Replica Health Monitoring
 
@@ -205,7 +205,7 @@ Currently, Monotone only uses the first replica in the `replicas` array.
 #### Example Usage (Planned)
 
 ```typescript
-const pool = createMonotonePool({
+const pool = createVirtualPool({
   primary: primaryConfig,
   replicas: [
     { host: 'replica1.example.com', weight: 1 },
@@ -226,7 +226,7 @@ const pool = createMonotonePool({
 
 ### MySQL Configuration Requirements
 
-Monotone requires **MySQL 5.7 or later** to function properly. This is because the library relies on GTID (Global Transaction Identifier) functionality and the `WAIT_FOR_EXECUTED_GTID_SET` function, which were introduced in MySQL 5.7.
+Virtual Pool requires **MySQL 5.7 or later** to function properly. This is because the library relies on GTID (Global Transaction Identifier) functionality and the `WAIT_FOR_EXECUTED_GTID_SET` function, which were introduced in MySQL 5.7.
 
 The following settings must be enabled on both your primary and replica MySQL servers:
 
