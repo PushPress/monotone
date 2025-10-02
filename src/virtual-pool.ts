@@ -27,7 +27,6 @@ function createPoolProxy({
   primary,
   replicas,
   logger,
-  timeout,
   mode,
 }: {
   primary: Pool;
@@ -49,6 +48,8 @@ function createPoolProxy({
       if (prop !== 'query') {
         return Reflect.get(target, prop, receiver);
       }
+
+      // TODO: initialize context here
 
       return async function (...args: unknown[]) {
         const sql = args[0] as string;
