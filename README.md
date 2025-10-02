@@ -150,6 +150,101 @@ const pool = createVirtualPool({
 - **Total Read Overhead**: GTID retrieval + synchronization wait (typically < 60ms)
 - **Fallback Performance**: Immediate fallback to primary when timeout exceeded
 
+## GTID Context Setup
+
+Virtual Pool includes a GTID context system that allows you to share GTID values across async operations within a request context. This is particularly useful for web applications where you want to maintain GTID consistency across multiple database operations within a single request.
+
+### Express Setup
+
+```typescript
+import express from 'express';
+import { createGtidContext } from 'virtual-pool';
+
+const app = express();
+
+// Middleware to create GTID context for each request
+app.use((req, res, next) => {
+  createGtidContext();
+  next();
+});
+
+// Your route handlers can now use GTID context
+app.get('/api/users/:id', async (req, res) => {
+  // GTID context is automatically available for all database operations
+  // within this request handler and any nested async operations
+  const user = await pool.query('SELECT * FROM users WHERE id = ?', [req.params.id]);
+  res.json(user);
+});
+```
+
+### Fastify Setup
+
+```typescript
+import Fastify from 'fastify';
+import { createGtidContext } from 'virtual-pool';
+
+const fastify = Fastify();
+
+// Plugin to create GTID context for each request
+fastify.register(async function (fastify) {
+  fastify.addHook('preHandler', async (request, reply) => {
+    createGtidContext();
+  });
+});
+
+// Your route handlers can now use GTID context
+fastify.get('/api/users/:id', async (request, reply) => {
+  // GTID context is automatically available for all database operations
+  // within this request handler and any nested async operations
+  const user = await pool.query('SELECT * FROM users WHERE id = ?', [request.params.id]);
+  return user;
+});
+```
+
+### Manual Context Management
+
+You can also manually manage GTID context for more control:
+
+```typescript
+import { createGtidContext } from 'virtual-pool';
+
+// Create context with initial GTID
+const context = createGtidContext('custom-gtid-123');
+
+// Read current context
+const currentContext = context.read();
+console.log(currentContext?.gtid); // 'custom-gtid-123'
+
+// Update context GTID
+context.set('updated-gtid-456');
+
+// Context persists through async operations
+const result = await someAsyncOperation();
+const finalContext = context.read();
+console.log(finalContext?.gtid); // 'updated-gtid-456'
+```
+
+You can also use the lower-level functions directly:
+
+```typescript
+import { init, read, set } from 'virtual-pool';
+
+// Initialize context with a specific GTID
+init('custom-gtid-123');
+
+// Read current context
+const context = read();
+console.log(context?.gtid); // 'custom-gtid-123'
+
+// Update context GTID
+set('updated-gtid-456');
+
+// Context persists through async operations
+const result = await someAsyncOperation();
+const finalContext = read();
+console.log(finalContext?.gtid); // 'updated-gtid-456'
+```
+
 ## Advanced Usage
 
 ## Performance Considerations
