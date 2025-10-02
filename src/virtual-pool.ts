@@ -2,22 +2,22 @@ import { createPool, Pool, PoolOptions } from 'mysql2/promise';
 import { Logger } from './logger';
 import { ReplicaSelector } from './replica-selector';
 import { isSelectQuery } from './mysql-parser';
+import {
+  GTID_CONTEXT_ENABLED_MODE,
+  PoolMode as Mode,
+  REPLICA_SELECTION_MODE,
+  includesMode,
+} from './pool-modes';
 
 /**
  * Configuration options for a Monotone pool
  */
-export interface MonotoneOptions {
+export interface VirtualPoolOptions {
   logger?: Logger;
-  /**
-   * When true, disables GTID-based synchronization for read queries.
-   * Read queries will be routed directly to the first replica without
-   * waiting for GTID synchronization. This provides simple read/write
-   * splitting without consistency guarantees.
-   */
-  disabled?: boolean;
   primary: PoolOptions;
   timeout?: number;
   replicas: PoolOptions[];
+  mode: Mode;
 }
 
 /**
@@ -28,18 +28,20 @@ function createPoolProxy({
   replicas,
   logger,
   timeout,
-  disabled,
+  mode,
 }: {
   primary: Pool;
   replicas: Pool[];
   logger?: Logger;
   timeout?: number;
-  disabled?: boolean;
+  mode: Mode;
 }): Pool {
   const selector = new ReplicaSelector({
     logger,
     replicas,
   });
+
+  const includesReplicaSelection = includesMode(mode, REPLICA_SELECTION_MODE);
 
   return new Proxy(primary, {
     get(target, prop, receiver) {
@@ -51,11 +53,10 @@ function createPoolProxy({
       return async function (...args: unknown[]) {
         const sql = args[0] as string;
 
-        if (isSelectQuery(sql)) {
+        if (isSelectQuery(sql) && includesReplicaSelection) {
           const selected = selector.getNextReplica() ?? primary;
 
-          // TODO: use async context to wait for reads when set
-
+          // TODO: add gtid context here
           return selected.query(...(args as Parameters<Pool['query']>));
         }
 
@@ -80,23 +81,23 @@ function createPoolProxy({
 /**
  * Create a Monotone pool that automatically routes queries between primary and replicas
  */
-export const createVirtualPool = (options: MonotoneOptions): Pool => {
+export const createVirtualPool = (options: VirtualPoolOptions): Pool => {
   const primary = createPool(options.primary);
 
-  // track session ids so they are returned on writes
-  primary.on('connection', async (conn) => {
-    await conn.query('SET SESSION session_track_gtids = OWN_GTID');
-  });
+  if (includesMode(options.mode, GTID_CONTEXT_ENABLED_MODE)) {
+    // track session ids so they are returned on writes
+    primary.on('connection', async (conn) => {
+      await conn.query('SET SESSION session_track_gtids = OWN_GTID');
+    });
+  }
 
   const replicas = options.replicas.map((replicaConfig) =>
     createPool(replicaConfig),
   );
 
   return createPoolProxy({
+    ...options,
     primary,
     replicas,
-    timeout: options.timeout,
-    logger: options.logger,
-    disabled: options.disabled,
   });
 };
