@@ -8,9 +8,11 @@ import {
   REPLICA_SELECTION_MODE,
   includesMode,
 } from './pool-modes';
+import { isSuccessfulReplication, waitForReplication } from './query-runner';
+import * as Context from './gtid-context';
 
 /**
- * Configuration options for a Monotone pool
+ * Configuration options for a virtual pool
  */
 export interface VirtualPoolOptions {
   logger?: Logger;
@@ -28,6 +30,7 @@ function createPoolProxy({
   replicas,
   logger,
   mode,
+  timeout,
 }: {
   primary: Pool;
   replicas: Pool[];
@@ -41,6 +44,7 @@ function createPoolProxy({
   });
 
   const includesReplicaSelection = includesMode(mode, REPLICA_SELECTION_MODE);
+  const includesGtidContext = includesMode(mode, GTID_CONTEXT_ENABLED_MODE);
 
   return new Proxy(primary, {
     get(target, prop, receiver) {
@@ -49,15 +53,42 @@ function createPoolProxy({
         return Reflect.get(target, prop, receiver);
       }
 
-      // TODO: initialize context here
-
+      let selected: Pool;
+      let ctx: Context.GTIDContext | undefined;
       return async function (...args: unknown[]) {
         const sql = args[0] as string;
 
         if (isSelectQuery(sql) && includesReplicaSelection) {
-          const selected = selector.getNextReplica() ?? primary;
+          selected = selector.getNextReplica() ?? primary;
 
-          // TODO: add gtid context here
+          // only read gtid context if it is enabled
+          if (includesGtidContext) {
+            ctx = Context.read();
+          }
+
+          if (ctx) {
+            const result = await waitForReplication(
+              selected,
+              {
+                gtidSet: ctx.gtid,
+              },
+              { logger, timeout: timeout ?? 0.05 }, // default to wait 50ms
+            );
+
+            // Fallback to primary if wait for replica is unsuccessful
+            if (!isSuccessfulReplication(result)) {
+              logger?.warn(
+                {
+                  sql: sql.substring(0, 100) as string,
+                  gtid: ctx.gtid,
+                },
+                "Replica didn't respond in time, falling back to primary",
+              );
+              selected = primary;
+            }
+          } else {
+            logger?.info('No GTID context found, skipping to replica');
+          }
           return selected.query(...(args as Parameters<Pool['query']>));
         }
 
